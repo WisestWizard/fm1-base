@@ -45,6 +45,10 @@ APP_DIR holds the app (app.h, app.c, its sources) and its fm1.toml:
   authors = ["Name"]         the .rfm1 manifest's authors (default: author, below, else the app repository's first
                              commit's author)
   words = "words.tsv"        the screen reader's words (fm1-reader), relative to APP_DIR
+  loader_screen = "loader_screen.c"   the app's own update screen (relative to APP_DIR), built into the update
+                             loader in place of felucca-bsp's loader/ldr_screen.c: the same five functions
+                             (ldr_screen_init, _progress, _heard, _tick, _done) under the same rules (all in RAM,
+                             the panel driven as that file drives it). Without it the loader's own screen
   font_full = ["L"]          font roles with lower case too (by default M and L have capitals and digits only)
   font_trim = true           each glyph stored as its lit box only (tools/gen_font.py FM1_FONT_TRIM): the same
                              pixels drawn, the fonts about 55 % smaller in flash
@@ -533,8 +537,20 @@ def build_loader():
     LDR.mkdir(parents=True, exist_ok=True)
     src = BSP / "loader"
     flags = [*CFLAGS, *inc(BSP / "chip", BSP / "boards" / "fm1")]
+    main = src / "loader.c"
+    if CONF.get("loader_screen"):   # the app's screen: loader.c as it is, its one include of the screen pointed there
+        scr = APP / CONF["loader_screen"]
+        text, line = main.read_text(), '#include "ldr_screen.c"'
+        if not scr.is_file():
+            raise SystemExit(f"build: fm1.toml loader_screen {CONF['loader_screen']!r}: no such file ({scr})")
+        if text.count(line) != 1:
+            raise SystemExit("loader: loader.c does not include ldr_screen.c exactly once: loader_screen cannot be applied")
+        main = LDR / "loader_app.c"
+        rel = os.path.relpath(scr.resolve(), LDR.resolve()).replace(os.sep, "/")
+        main.write_text(text.replace(line, f'#include "{rel}"'))
+        flags += inc(src)           # (its other includes are beside the loader.c it was copied from)
     tc_all(("cc", "-c", src / "crt0_ldr.S", "-o", LDR / "crt0_ldr.o"),
-           ("cc", *flags, "-c", src / "loader.c", "-o", LDR / "loader.o"))
+           ("cc", *flags, "-c", main, "-o", LDR / "loader.o"))
     elf = LDR / "loader.elf"
     tc("pi32v2/bin/ld", "--gc-sections", "-e", "_start", "-T", src / "loader.ld",
        LDR / "crt0_ldr.o", LDR / "loader.o", "-o", elf)
